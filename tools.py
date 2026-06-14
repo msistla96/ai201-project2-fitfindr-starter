@@ -51,6 +51,7 @@ def _ask_llm(prompt: str, temperature: float = 0.6) -> str:
     return resp.choices[0].message.content.strip()
 
 
+
 def _tokenize(text: str) -> set[str]:
     """Lowercase word tokens, ignoring very short fragments."""
     return {w for w in re.findall(r"[a-z0-9]+", (text or "").lower()) if len(w) > 2}
@@ -71,66 +72,103 @@ def _item_text(item: dict) -> str:
 
 # ── Tool 1: search_listings ───────────────────────────────────────────────────
 
+_known_terms_cache: set[str] | None = None
+
+def _get_known_terms() -> set[str]:
+    global _known_terms_cache
+    if _known_terms_cache is None:
+        _known_terms_cache = set()
+        for item in load_listings():
+            _known_terms_cache |= _tokenize(_item_text(item))
+    return _known_terms_cache
+
+
 def search_listings(
     description: str,
     size: str | None = None,
     max_price: float | None = None,
 ):
-    """
-    Search the mock listings dataset for items matching the description,
-    optional size, and optional price ceiling.
+    
 
-    Args:
-        description: Keywords describing what the user is looking for
-                     (e.g., "vintage graphic tee").
-        size:        Size string to filter by, or None to skip size filtering.
-                     Matching is case-insensitive (e.g., "M" matches "S/M").
-        max_price:   Maximum price (inclusive), or None to skip price filtering.
+        """
+        Search the mock listings dataset for items matching the description,
+        optional size, and optional price ceiling.
 
-    Returns:
-        On success "items": list[dict],  # matching listings, best match first
-                
-        On invalid input (missing description / nothing provided), returns a
-        descriptive error string instead — does NOT raise an exception.
+        Args:
+            description: Keywords describing what the user is looking for
+                        (e.g., "vintage graphic tee").
+            size:        Size string to filter by, or None to skip size filtering.
+                        Matching is case-insensitive (e.g., "M" matches "S/M").
+            max_price:   Maximum price (inclusive), or None to skip price filtering.
 
-    Each listing dict has the following fields:
-        id, title, description, category, style_tags (list), size,
-        condition, price (float), colors (list), brand, platform
+        Returns:
+            On success "items": list[dict],  # matching listings, best match first
+                    
+            On invalid input (missing description / nothing provided), returns a
+            descriptive error string instead — does NOT raise an exception.
 
-    Failure handling (per spec):
-        - Missing description (or no parameters at all): return an error string
-          describing what is missing.
+        Each listing dict has the following fields:
+            id, title, description, category, style_tags (list), size,
+            condition, price (float), colors (list), brand, platform
 
-    """
-    has_size = size is not None and str(size).strip() != ""
-    has_price = max_price is not None
+        Failure handling (per spec):
+            - Missing description (or no parameters at all): return an error string
+            describing what is missing.
 
-    if description == "" or description.strip() == "":
-        missing = ["description"]
-        if not has_size and not has_price:
-            return (
-                "Cannot search: no parameters were provided. At minimum a "
-                "`description` of the item you're looking for is required."
-            )
-        return f"Cannot search: missing required parameter(s): {', '.join(missing)}."
+        """
 
-   
-    query_tokens = _tokenize(description)
-    scored = []
-    for item in load_listings():
-        if max_price is not None and item.get("price", 0) > max_price:
-            continue
-        if size is not None and size.strip():
-            if size.strip().lower() not in (item.get("size") or "").lower():
+        has_size = size is not None and str(size).strip() != ""
+        has_price = max_price is not None
+
+        if not description or description.strip() == "":
+            if not has_size and not has_price:
+                return (
+                    "Cannot search: no parameters were provided. At minimum a "
+                    "`description` of the item you're looking for is required."
+                )
+            return "Cannot search: missing required parameter(s): description."
+
+        query_tokens = _tokenize(description)
+        known_terms = _get_known_terms()
+
+        known_query_tokens = query_tokens & known_terms
+        unknown_query_tokens = query_tokens - known_terms
+        unknown_count = len(unknown_query_tokens)
+
+        if not known_query_tokens:
+            return []
+
+        scored = []
+        for item in load_listings():
+            if max_price is not None and item.get("price", 0) > max_price:
                 continue
-        score = len(query_tokens & _tokenize(_item_text(item)))
-        if score > 0:
-            scored.append((score, item))
-    if len(scored) > 0:
-        scored.sort(key=lambda pair: pair[0], reverse=True)
-        return [item for _, item in scored]
 
-    return []
+            if size is not None and size.strip():
+                if size.strip().lower() not in (item.get("size") or "").lower():
+                    continue
+
+            item_tokens = _tokenize(_item_text(item))
+
+            known_score = len(known_query_tokens & item_tokens)
+            final_score = known_score / (2 ** unknown_count)
+
+            if unknown_count == 0:
+                # No unknowns — use raw score, just require at least one match
+                if known_score > 0:
+                    scored.append((final_score, item))
+            else:
+                # Has unknowns — apply strict threshold to penalize
+                """ Author note: In the case of final_score == 1, some queries such as `pink saree` should not give any results but `90s Silk Mini Dress` should probably match with `90s Silk Slip Dress`.
+                # For the scope of this assignment, this will filter out final_score == 1, but combining semantic search would provide more accurate results.
+                """
+                if final_score > 1.0:
+                    scored.append((final_score, item))
+
+        if scored:
+            scored.sort(key=lambda pair: pair[0], reverse=True)
+            return [item for _, item in scored]
+
+        return []
 
 
 # ── Tool 2: suggest_outfit ────────────────────────────────────────────────────

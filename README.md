@@ -245,12 +245,22 @@ These variables are globally available to each tool call, but only the required 
 
 | Tool | Failure mode | Agent response |
 |------|-------------|----------------|
-| search_listings | No results match the query | |
-| search_listings | Description or all parameters are empty |  |
-| suggest_outfit | Wardrobe is empty or missing |  |
-| create_fit_card | Outfit input is missing or incomplete |  |
-| price_comparision |  |
+| search_listings | No results match the query | Agent retries with looser constraints and returns results if any or simple shows the user an error and asks to try with a different value. |
+| suggest_outfit | Wardrobe is empty or missing | Agent returns a response with a more general outfit suggestion.  |
+| create_fit_card | Outfit input is missing or incomplete | Agent returns an error to the user and asks to retry again |
+| price_comparision | No results are returned | Agent lets the user know that there are no results and proceeds as usual. | 
 <!-- | suggest_trends | Size is missing or it returns no results  | Lets the the user know respective error message and provides general trending styles without any size(Based on Tool Spec) | -->
+
+
+**Example queries**
+
+**Trigger search_listings retry when no results match**
+Query: silk saree
+Agent Answer: Error: No listings matched 'silk saree'. Try a different description, size, or price.
+
+**Description is found to be missing or nonsensical before calling search_listings**
+Query: 100
+Agent Answer: Error: Cannot search: no parameters were provided. At minimum a `description` of the item you're looking for is required.
 
 ---
 
@@ -285,6 +295,6 @@ Changes or overrides made to implementation:
 The Specifications provided in `plannning.md` helped me to use Test Driven Development as part of the implementation, which in turn helped me improve and refine my decision making for how to implement `agent.py`. 
 
 Some of the ways I diverged from the specification:
-1. I iterated back and forth from testing the agent and checking if the agent decision making needed to be refined or further modified i.e if parsing the query with Regex worked for all cases or could an LLM be involved as a hybrid approach. 
-2. I also made a decision using ChatGPT to use a smaller model `llama-3.1-8b-instant` for the LLM used in `tools.py` as from the previous project experience, I have seen Groq rate limit my requests. Also, the LLM used by the tools was mainly for summarization rather than for planning, as used by the Agent LLM. This helps reduce tokens and prevents rate limiting issues caused by using one single model.
-
+1. I iterated back and forth from testing the agent and checking if the agent decision making needed to be refined or further modified i.e if parsing the query with Regex worked for all cases or could an LLM be involved as a hybrid approach. I tried both approaches and decided to use an LLM for accuracy as the regex search did not check to see if a parameter was filled with a valid value. Regex would be a backup if the LLM failed, which was something I didn't realize was necessary until I encountered some rate limiting issues from the model. 
+2. I also made a decision to use a smaller model `llama-3.1-8b-instant` for the LLM used in `tools.py` and for Query parsing in `agent.py` as there were rate limiting issues with a 10k token limit per day. Also, the LLM used by the tools and query parsing was mainly for summarization and parsing respectively which are capabilties that smaller models have been doing well on for a long time as opposed to planning used for the Agent, which is done by a larger model. This helps reduce tokens and prevents rate limiting issues caused by using one single model. It is worth testing models for planning as well.
+3. `search_listings()` in the initial implementation used blind keyword search, which did not work well for the query `pink saree` as it would match anything that is pink even if a saree was never in the list. To make sure the search was tighter, I came up with a keyword search that score matched and unmatched words as a ratio, penalizing if number of unmatched words is larger than matched words (Claude suggested filtering unknown words and matching known words but it didn't work). Semantic search should solve the issue but it is beyond the scope of the assignment.
