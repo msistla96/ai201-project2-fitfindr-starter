@@ -222,7 +222,7 @@ def _plan_tools(query: str) -> list[str]:
     # Enforce hard dependencies regardless of the model's output.
     plan = [t for t in plan if t != "search_listings"]
     plan.insert(0, "search_listings")
-    if "create_fit_card" in plan:
+    if "create_fit_card" not in plan:
         plan = [t for t in plan if t != "create_fit_card"] + ["create_fit_card"]
     return plan
 
@@ -419,71 +419,71 @@ if __name__ == "__main__":
     )
     print(f"Error message: {session2['error']}")
 
-    print("\n\n=== search_listings retry due to no match ===\n")
-    session3 = run_agent(
-        query="silk saree under 100",
-        wardrobe=get_empty_wardrobe(),
-    )
-    if session3["error"]:
-        print(f"Error: {session3['error']}")
-    else:
-        print(f"Found: {session3['selected_item']['title']}")
-        print(f"Price: {session3['price_comparision']}")
-        print(f"\nOutfit: {session3['outfit_suggestion']}")
-        print(f"\nFit card: {session3['fit_card']}")
+    # print("\n\n=== search_listings retry due to no match ===\n")
+    # session3 = run_agent(
+    #     query="silk saree under 100",
+    #     wardrobe=get_empty_wardrobe(),
+    # )
+    # if session3["error"]:
+    #     print(f"Error: {session3['error']}")
+    # else:
+    #     print(f"Found: {session3['selected_item']['title']}")
+    #     print(f"Price: {session3['price_comparision']}")
+    #     print(f"\nOutfit: {session3['outfit_suggestion']}")
+    #     print(f"\nFit card: {session3['fit_card']}")
 
-    print("\n\n=== description is None ===\n")
-    session3 = run_agent(
-        query="100",
-        wardrobe=get_empty_wardrobe(),
-    )
-    if session3["error"]:
-        print(f"Error: {session3['error']}")
-    else:
-        print(f"Found: {session3['selected_item']['title']}")
-        print(f"Price: {session3['price_comparision']}")
-        print(f"\nOutfit: {session3['outfit_suggestion']}")
-        print(f"\nFit card: {session3['fit_card']}")
+    # print("\n\n=== description is None ===\n")
+    # session3 = run_agent(
+    #     query="100",
+    #     wardrobe=get_empty_wardrobe(),
+    # )
+    # if session3["error"]:
+    #     print(f"Error: {session3['error']}")
+    # else:
+    #     print(f"Found: {session3['selected_item']['title']}")
+    #     print(f"Price: {session3['price_comparision']}")
+    #     print(f"\nOutfit: {session3['outfit_suggestion']}")
+    #     print(f"\nFit card: {session3['fit_card']}")
     
 
-    print("\n\n=== match due to midi,dress ===\n")
-    session3 = run_agent(
-        query="flowy midi dress under $40",
-        wardrobe=get_empty_wardrobe(),
-    )
-    if session3["error"]:
-        print(f"Error: {session3['error']}")
-    else:
-        print(f"Found: {session3['selected_item']['title']}")
-        print(f"Price: {session3['price_comparision']}")
-        print(f"\nOutfit: {session3['outfit_suggestion']}")
-        print(f"\nFit card: {session3['fit_card']}")
+    # print("\n\n=== match due to midi,dress ===\n")
+    # session3 = run_agent(
+    #     query="flowy midi dress under $40",
+    #     wardrobe=get_empty_wardrobe(),
+    # )
+    # if session3["error"]:
+    #     print(f"Error: {session3['error']}")
+    # else:
+    #     print(f"Found: {session3['selected_item']['title']}")
+    #     print(f"Price: {session3['price_comparision']}")
+    #     print(f"\nOutfit: {session3['outfit_suggestion']}")
+    #     print(f"\nFit card: {session3['fit_card']}")
 
     
-    print("\n\n=== match due to black, boots===\n")
-    session3 = run_agent(
-        query="black boots size 8",
-        wardrobe=get_empty_wardrobe(),
-    )
-    if session3["error"]:
-        print(f"Error: {session3['error']}")
-    else:
-        print(f"Found: {session3['selected_item']['title']}")
-        print(f"Price: {session3['price_comparision']}")
-        print(f"\nOutfit: {session3['outfit_suggestion']}")
-        print(f"\nFit card: {session3['fit_card']}")
+    # print("\n\n=== match due to black, boots===\n")
+    # session3 = run_agent(
+    #     query="black boots size 8",
+    #     wardrobe=get_empty_wardrobe(),
+    # )
+    # if session3["error"]:
+    #     print(f"Error: {session3['error']}")
+    # else:
+    #     print(f"Found: {session3['selected_item']['title']}")
+    #     print(f"Price: {session3['price_comparision']}")
+    #     print(f"\nOutfit: {session3['outfit_suggestion']}")
+    #     print(f"\nFit card: {session3['fit_card']}")
 
-    print("\n\n=== perfect match ===\n")
-    session3 = run_agent(
-        query="90s track jacket in size M",
-        wardrobe=get_empty_wardrobe(),
-    )
-    if session3["error"]:
-        print(f"Error: {session3['error']}")
-    else:
-        print(f"Found: {session3['selected_item']['title']}")
-        print(f"Price: {session3['price_comparision']}")
-        print(f"\nOutfit: {session3['outfit_suggestion']}")
-        print(f"\nFit card: {session3['fit_card']}")
+    # print("\n\n=== perfect match ===\n")
+    # session3 = run_agent(
+    #     query="90s track jacket in size M",
+    #     wardrobe=get_empty_wardrobe(),
+    # )
+    # if session3["error"]:
+    #     print(f"Error: {session3['error']}")
+    # else:
+    #     print(f"Found: {session3['selected_item']['title']}")
+    #     print(f"Price: {session3['price_comparision']}")
+    #     print(f"\nOutfit: {session3['outfit_suggestion']}")
+    #     print(f"\nFit card: {session3['fit_card']}")
 
         
