@@ -20,8 +20,15 @@ Usage (once implemented):
 
 import inspect
 import re
+import logging
+import json
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 
 from tools import (
+    TOOL_MODEL,
     _get_groq_client,
     search_listings,
     suggest_outfit,
@@ -109,34 +116,66 @@ _SIZE_RE = re.compile(r"\bsize\s+([a-z0-9/]+)\b", re.IGNORECASE)
 
 
 def _parse_query(query: str) -> dict:
-    """Extract description, size, and max_price from a natural-language query."""
-    size = None
-    max_price = None
-    leftover = query
+    """Extract description, size, and max_price from a natural-language query using Groq, with regex fallback."""
 
-    price_match = _PRICE_RE.search(query)
-    if price_match:
-        max_price = float(price_match.group(1) or price_match.group(2))
-        leftover = leftover.replace(price_match.group(0), " ")
+    prompt = f"""Extract search parameters from this fashion query and return ONLY a JSON object with no explanation.
 
-    size_match = _SIZE_RE.search(query)
-    if size_match:
-        size = size_match.group(1)
-        leftover = leftover.replace(size_match.group(0), " ")
+    Query: "{query}"
 
-    # The remaining words, stripped of common filler, form the description.
-    description = re.sub(r"\$\s*\d+(?:\.\d+)?", " ", leftover)
-    description = re.sub(
-        r"\b(i'?m|i am|looking for|a|an|the|for|some|please|find|me)\b",
-        " ",
-        description,
-        flags=re.IGNORECASE,
-    )
-    description = re.sub(r"\s+", " ", description).strip(" ,.")
+    Return this exact structure:
+    {{"description": "clothing item description only, no size or price info", "size": "size if mentioned, otherwise null", "max_price": number if a price or budget is mentioned, otherwise null}}
 
-    print(f"Parsed Query: description: {description}, size: {size}, max_price: {max_price}")
+    Rules:
+    - description should only contain what the item IS (e.g. "vintage graphic tee", "flowy midi skirt")
+    - If the query is just a number like "100" or makes no sense as a fashion query, set description to null
+    - size examples: "M", "S/M", "W28", "US 8"
+    - max_price should be a number only, no $ sign"""
 
-    return {"description": description, "size": size, "max_price": max_price}
+    try:
+        client = _get_groq_client()
+        response = client.chat.completions.create(
+            model=TOOL_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+        )
+        raw = response.choices[0].message.content.strip()
+        parsed = json.loads(raw)
+
+        description = parsed.get("description") or ""
+        size = parsed.get("size")
+        max_price = parsed.get("max_price")
+
+        logger.info(f"Parsed Query : description: {description}, size: {size}, max_price: {max_price}")
+        return {"description": description, "size": size, "max_price": max_price}
+
+    except Exception:
+        logger.warning("LLM Query parse failed, falling back to regex")
+
+        size = None
+        max_price = None
+        leftover = query
+
+        price_match = _PRICE_RE.search(query)
+        if price_match:
+            max_price = float(price_match.group(1) or price_match.group(2))
+            leftover = leftover.replace(price_match.group(0), " ")
+
+        size_match = _SIZE_RE.search(query)
+        if size_match:
+            size = size_match.group(1)
+            leftover = leftover.replace(size_match.group(0), " ")
+
+        description = re.sub(r"\$\s*\d+(?:\.\d+)?", " ", leftover)
+        description = re.sub(
+            r"\b(i'?m|i am|looking for|a|an|the|for|some|please|find|me)\b",
+            " ",
+            description,
+            flags=re.IGNORECASE,
+        )
+        description = re.sub(r"\s+", " ", description).strip(" ,.")
+
+        logger.info(f"Parsed Query (regex): description: {description}, size: {size}, max_price: {max_price}")
+        return {"description": description, "size": size, "max_price": max_price}
 
 
 # ── ReAct planner (Groq native tool calling) ──────────────────────────────────
@@ -245,7 +284,7 @@ def run_agent(query: str, wardrobe: dict) -> dict:
 
     iterations = 0
     for tool_name in plan:
-        print("Tool name", tool_name)
+        logger.info(f"\nTool name called: {tool_name}\n")
         # The loop always checks it hasn't exceeded the iteration budget.
         if iterations >= MAX_ITERATIONS:
             break
@@ -264,10 +303,13 @@ def run_agent(query: str, wardrobe: dict) -> dict:
 def _step_search(session: dict) -> bool:
     """search_listings, retrying with looser constraints per Error Handling."""
     parsed = session["parsed"]
+
+    logger.info(f"\nQuery parsed: {session['parsed']}\n")
     description = parsed["description"]
     size, max_price = parsed["size"], parsed["max_price"]
 
     # Invalid input (missing description) → tool returns an error string.
+    logger.info(f": Passing parameters {description} , {size}, {max_price}\n")
     results = search_listings(description, size, max_price)
     if isinstance(results, str):
         session["error"] = results
@@ -275,25 +317,32 @@ def _step_search(session: dict) -> bool:
 
     # No matches: retry dropping size, then price (per spec).
     if not results and size is not None:
+        logger.info(f"\nRetrying call with no size passed:\n")
         results = search_listings(description, None, max_price)
     if not results and max_price is not None:
+        logger.info(f"\nRetrying call with no price passed:\n")
         results = search_listings(description, None, None)
 
     if not results:
         session["error"] = (
             f"No listings matched '{description or query_text(session)}'. "
-            "Try a different description, size, or budget."
+            "Try a different description, size, or price."
         )
         return False
 
     session["search_results"] = results
     session["selected_item"] = results[0]
+
+    logger.info(f": Stored search_results:{session['search_results']} and selected_item: {session['selected_item']} in session\n")
     return True
 
 
 def _step_price(session: dict) -> bool:
     """price_comparision — store the assessment and always continue (per spec)."""
+
+    logger.info(f"\n: Using selected_item: {session['selected_item']}")
     session["price_comparision"] = price_comparision(session["selected_item"])
+    logger.info(f": Stored price_comparision: {session['price_comparision']} in session\n")
     return True
 
 
@@ -305,20 +354,27 @@ def _step_price(session: dict) -> bool:
 
 def _step_outfit(session: dict) -> bool:
     """suggest_outfit — empty-wardrobe fallback is handled inside the tool."""
+    logger.info(f"\n: Using selected_item: {session['selected_item']} and wardrobe: {session['wardrobe']}\n")
     session["outfit_suggestion"] = suggest_outfit(
         session["selected_item"], session["wardrobe"]
     )
+    logger.info(f": Stored outfit_suggestion:{session['outfit_suggestion']}\n")
     return True
 
 
 def _step_fit_card(session: dict) -> bool:
     """create_fit_card — the final tool; missing outfit ends the run with an error."""
     outfit = session["outfit_suggestion"] or ""
-    card = create_fit_card(outfit, session["selected_item"])
-    if not outfit.strip() or card.lower().startswith("cannot create"):
+    if outfit == "" or not outfit:
+        session["error"] = f"Error: Outfit suggestions are missing or empty."
+        return False
+    logger.info(f"\nUsing outfit_suggestion: {session['outfit_suggestion']} and selected_item: {session['selected_item']}\n")
+    card = create_fit_card(outfit, session['selected_item'])
+    if card.lower().startswith("cannot create"):
         session["error"] = card
         return False
     session["fit_card"] = card
+    logger.info(f"Stored fit_card:{session['fit_card']}\n")
     return True
 
 
@@ -363,9 +419,9 @@ if __name__ == "__main__":
     )
     print(f"Error message: {session2['error']}")
 
-    print("\n\n=== No-results path with empty wardrobe ===\n")
+    print("\n\n=== search_listings retry due to no match ===\n")
     session3 = run_agent(
-        query="looking for a vintage graphic tee under $30",
+        query="silk saree under 100",
         wardrobe=get_empty_wardrobe(),
     )
     if session3["error"]:
@@ -375,3 +431,59 @@ if __name__ == "__main__":
         print(f"Price: {session3['price_comparision']}")
         print(f"\nOutfit: {session3['outfit_suggestion']}")
         print(f"\nFit card: {session3['fit_card']}")
+
+    print("\n\n=== description is None ===\n")
+    session3 = run_agent(
+        query="100",
+        wardrobe=get_empty_wardrobe(),
+    )
+    if session3["error"]:
+        print(f"Error: {session3['error']}")
+    else:
+        print(f"Found: {session3['selected_item']['title']}")
+        print(f"Price: {session3['price_comparision']}")
+        print(f"\nOutfit: {session3['outfit_suggestion']}")
+        print(f"\nFit card: {session3['fit_card']}")
+    
+
+    # print("\n\n=== match due to midi,dress ===\n")
+    # session3 = run_agent(
+    #     query="flowy midi dress under $40",
+    #     wardrobe=get_empty_wardrobe(),
+    # )
+    # if session3["error"]:
+    #     print(f"Error: {session3['error']}")
+    # else:
+    #     print(f"Found: {session3['selected_item']['title']}")
+    #     print(f"Price: {session3['price_comparision']}")
+    #     print(f"\nOutfit: {session3['outfit_suggestion']}")
+    #     print(f"\nFit card: {session3['fit_card']}")
+
+    
+    # print("\n\n=== match due to black, boots===\n")
+    # session3 = run_agent(
+    #     query="black boots size 8",
+    #     wardrobe=get_empty_wardrobe(),
+    # )
+    # if session3["error"]:
+    #     print(f"Error: {session3['error']}")
+    # else:
+    #     print(f"Found: {session3['selected_item']['title']}")
+    #     print(f"Price: {session3['price_comparision']}")
+    #     print(f"\nOutfit: {session3['outfit_suggestion']}")
+    #     print(f"\nFit card: {session3['fit_card']}")
+
+    # print("\n\n=== perfect match ===\n")
+    # session3 = run_agent(
+    #     query="90s track jacket in size M",
+    #     wardrobe=get_empty_wardrobe(),
+    # )
+    # if session3["error"]:
+    #     print(f"Error: {session3['error']}")
+    # else:
+    #     print(f"Found: {session3['selected_item']['title']}")
+    #     print(f"Price: {session3['price_comparision']}")
+    #     print(f"\nOutfit: {session3['outfit_suggestion']}")
+    #     print(f"\nFit card: {session3['fit_card']}")
+
+        

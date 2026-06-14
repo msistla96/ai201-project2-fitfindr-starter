@@ -13,6 +13,10 @@ but check your terminal — the port may differ).
 """
 
 import gradio as gr
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 from agent import run_agent
 from utils.data_loader import get_example_wardrobe, get_empty_wardrobe
@@ -51,10 +55,12 @@ def handle_query(user_query: str, wardrobe_choice: str) -> tuple[str, str, str]:
         if wardrobe_choice == "Empty wardrobe (new user)"
         else get_example_wardrobe()
     )
-
+    logging.info("Loaded wardrobe!")
+    logging.info("\nRunning Agent.....\n")
     session = run_agent(user_query, wardrobe)
 
     if session["error"]:
+        logging.error(f"\nError when running Agent: {session['error']}")
         return session["error"], "", ""
 
     item = session["selected_item"]
@@ -76,8 +82,9 @@ def handle_query(user_query: str, wardrobe_choice: str) -> tuple[str, str, str]:
 EXAMPLE_QUERIES = [
     "vintage graphic tee under $30",
     "90s track jacket in size M",
-    "flowy midi skirt under $40",
-    "black combat boots size 8",
+    "flowy midi dress under $40",
+    "black boots size 8",
+    "silk pink saree under 100" # deliberate no-results test as there are no sarees
     "designer ballgown size XXS under $5",   # deliberate no-results test
 ]
 
