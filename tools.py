@@ -12,7 +12,11 @@ Tools:
     create_fit_card(outfit, new_item)               → str
 """
 
+import json
 import os
+import re
+import urllib.error
+import urllib.request
 
 from dotenv import load_dotenv
 from groq import Groq
@@ -20,6 +24,8 @@ from groq import Groq
 from utils.data_loader import load_listings
 
 load_dotenv()
+
+TOOL_MODEL = "llama-3.1-8b-instant"
 
 
 # ── Groq client ───────────────────────────────────────────────────────────────
@@ -34,13 +40,42 @@ def _get_groq_client():
     return Groq(api_key=api_key)
 
 
+def _ask_llm(prompt: str, temperature: float = 0.6) -> str:
+    """Send a single-turn prompt to the LLM and return the text response."""
+    client = _get_groq_client()
+    resp = client.chat.completions.create(
+        model=TOOL_MODEL,
+        temperature=temperature,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return resp.choices[0].message.content.strip()
+
+
+def _tokenize(text: str) -> set[str]:
+    """Lowercase word tokens, ignoring very short fragments."""
+    return {w for w in re.findall(r"[a-z0-9]+", (text or "").lower()) if len(w) > 2}
+
+
+def _item_text(item: dict) -> str:
+    """Flatten a listing's searchable fields into one string."""
+    parts = [
+        item.get("title", ""),
+        item.get("description", ""),
+        item.get("category", ""),
+        item.get("brand") or "",
+        " ".join(item.get("style_tags", [])),
+        " ".join(item.get("colors", [])),
+    ]
+    return " ".join(parts)
+
+
 # ── Tool 1: search_listings ───────────────────────────────────────────────────
 
 def search_listings(
     description: str,
     size: str | None = None,
     max_price: float | None = None,
-) -> list[dict]:
+):
     """
     Search the mock listings dataset for items matching the description,
     optional size, and optional price ceiling.
@@ -53,23 +88,48 @@ def search_listings(
         max_price:   Maximum price (inclusive), or None to skip price filtering.
 
     Returns:
-        A list of matching listing dicts, sorted by relevance (best match first).
-        Returns an empty list if nothing matches — does NOT raise an exception.
+        On success "items": list[dict],  # matching listings, best match first
+                
+        On invalid input (missing description / nothing provided), returns a
+        descriptive error string instead — does NOT raise an exception.
 
     Each listing dict has the following fields:
         id, title, description, category, style_tags (list), size,
         condition, price (float), colors (list), brand, platform
 
-    TODO:
-        1. Load all listings with load_listings().
-        2. Filter by max_price and size (if provided).
-        3. Score each remaining listing by keyword overlap with `description`.
-        4. Drop any listings with a score of 0 (no relevant matches).
-        5. Sort by score, highest first, and return the listing dicts.
+    Failure handling (per spec):
+        - Missing description (or no parameters at all): return an error string
+          describing what is missing.
 
-    Before writing code, fill in the Tool 1 section of planning.md.
     """
-    # Replace this with your implementation
+    has_size = size is not None and str(size).strip() != ""
+    has_price = max_price is not None
+
+    if description == "" or description.strip() == "":
+        missing = ["description"]
+        if not has_size and not has_price:
+            return (
+                "Cannot search: no parameters were provided. At minimum a "
+                "`description` of the item you're looking for is required."
+            )
+        return f"Cannot search: missing required parameter(s): {', '.join(missing)}."
+
+   
+    query_tokens = _tokenize(description)
+    scored = []
+    for item in load_listings():
+        if max_price is not None and item.get("price", 0) > max_price:
+            continue
+        if size is not None and size.strip():
+            if size.strip().lower() not in (item.get("size") or "").lower():
+                continue
+        score = len(query_tokens & _tokenize(_item_text(item)))
+        if score > 0:
+            scored.append((score, item))
+    if len(scored) > 0:
+        scored.sort(key=lambda pair: pair[0], reverse=True)
+        return [item for _, item in scored]
+
     return []
 
 
@@ -100,8 +160,38 @@ def suggest_outfit(new_item: dict, wardrobe: dict) -> str:
 
     Before writing code, fill in the Tool 2 section of planning.md.
     """
-    # Replace this with your implementation
-    return ""
+    if not new_item or new_item == []:
+        return "No outfit suggestions: no item was provided to style."
+
+    item_line = f"{new_item.get('title', 'item')} ({new_item.get('category', '')}) — "
+    item_line += f"colors: {', '.join(new_item.get('colors', []))}; "
+    item_line += f"style: {', '.join(new_item.get('style_tags', []))}."
+
+    items = (wardrobe or {}).get("items", [])
+    if not items or items == []:
+        prompt = (
+            "You are a fashion stylist. The user is considering this thrifted item:\n"
+            f"{item_line}\n\n"
+            "They have no wardrobe on file. Give general styling advice: what kinds "
+            "of pieces pair well with it, the vibe it suits, and 1-2 or more outfit ideas. "
+            "Keep it to a short, friendly paragraph."
+        )
+        return _ask_llm(prompt)
+
+    closet = "\n".join(
+        f"- {it.get('name')} ({it.get('category')}; "
+        f"{', '.join(it.get('colors', []))}; {', '.join(it.get('style_tags', []))})"
+        for it in items
+    )
+    prompt = (
+        "You are a fashion stylist. The user is considering this thrifted item:\n"
+        f"{item_line}\n\n"
+        "Their existing wardrobe:\n"
+        f"{closet}\n\n"
+        "Suggest 1-2 complete outfits that pair the new item with specific named "
+        "pieces from their wardrobe. Reference the wardrobe items by name."
+    )
+    return _ask_llm(prompt)
 
 
 # ── Tool 3: create_fit_card ───────────────────────────────────────────────────
@@ -133,5 +223,106 @@ def create_fit_card(outfit: str, new_item: dict) -> str:
 
     Before writing code, fill in the Tool 3 section of planning.md.
     """
+    error_message = ""
+    if  outfit == "" or outfit.strip() == "":
+        error_message+="Cannot create a fit card: no outfit suggestion was provided"
+    if new_item == {}:
+            if error_message == "":
+                error_message+="Cannot create a fit card: "
+            else:
+                error_message+= " and "
+            error_message+="no chosen item for the user was provided"
+    if error_message !="":
+        return error_message
+
+    prompt = (
+        "Write a casual, authentic OOTD-style social caption (2-4 sentences) for a "
+        "thrifted find. Sound like a real person posting, not a product listing.\n\n"
+        f"Item: {new_item.get('title', 'thrifted piece')}\n"
+        f"Price: ${new_item.get('price', '?')}\n"
+        f"Platform: {new_item.get('platform', 'thrift')}\n"
+        f"Outfit: {outfit}\n\n"
+        "Mention the item name, price, and platform naturally (once each) and "
+        "capture the outfit vibe in specific terms."
+    )
+
+    caption = _ask_llm(prompt, temperature=0.9)
+    if caption and caption.strip():
+        return caption
+    return "Cannot create a fit card: caption generation returned no text."
+
+# ── Tool 4: price_comparision ───────────────────────────────────────────────────
+
+
+def price_comparision(new_item: dict):
+    """
+    Provides a price assessment by comparing an item to other comparable items
+    in the mock listings dataset.
+
+    Args:
+        new_item: The listing dict for the item the user selected.
+
+    Returns:
+        On success: "assessment":  str,   # paragraph + fair/overpriced/underpriced verdict
+        On failure (missing item, or no comparables to assess against), returns a
+        descriptive error string — does NOT raise an exception.
+
+    Failure handling (per spec):
+        - new_item empty / missing: return an error string.
+        - No comparable items found: return an error string.
+    """
+    if not new_item or new_item == {}:
+        return "Cannot assess price: no item was provided."
+
+    category = new_item.get("category")
+    comparables = [
+        it for it in load_listings()
+        if it.get("category") == category and it.get("id") != new_item.get("id")
+    ]
+    if not comparables:
+        return "Cannot assess price: no comparable items found in the dataset."
+
+    prices = [it.get("price", 0) for it in comparables]
+    avg = sum(prices) / len(prices)
+    item_price = new_item.get("price", 0)
+
+    comp_lines = "\n".join(
+        f"- {it.get('title')}: ${it.get('price')}" for it in comparables[:8]
+    )
+    prompt = (
+        "You are a thrift pricing expert. Assess whether this item is fairly priced "
+        "against comparable listings, then give a clear final verdict.\n\n"
+        f"Item: {new_item.get('title')} — ${item_price}\n"
+        f"Average price of {len(comparables)} comparable {category}: ${avg:.2f}\n"
+        f"Comparables:\n{comp_lines}\n\n"
+        "Write a short paragraph with the assessment and a final fair/overpriced/"
+        "underpriced verdict."
+    )
+    return _ask_llm(prompt)
+
+# ── Tool 5: suggest_trends ───────────────────────────────────────────────────
+
+
+def suggest_trends(user_size: str | None) -> str:
+    """
+    Find latest fashion trends for the user by looking at latest posts or tags that match the user's size range.
+
+    Args:
+        wardrobe: dict
+
+    Returns:
+        A 2–4 sentence string describing (5) trends for the user.
+        This should be 
+
+    TODO:
+        1. Guard against an empty .
+        2. Build a prompt that gives the LLM the item details and the outfit,
+           and asks for a caption matching the style guidelines above.
+        3. Call the LLM and return the response.
+
+    Before writing code, fill in the Tool 3 section of planning.md.
+    """
     # Replace this with your implementation
     return ""
+
+
