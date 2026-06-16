@@ -194,7 +194,7 @@ def _plan_tools(query: str) -> list[str]:
         "content": (
             "You are FitFindr's planning agent. Decide which of the available tools "
             "to call, and in what order, to fulfil the user's request. Call every "
-            "tool the request needs (and only those) in the right order. "
+            "tool the request needs (and only those) in the right order based on whether it needs input from a function. Use ReAct Style reasoning when doing so."
             "search_listings must be called first because the other tools depend on "
             "the item it finds; create_fit_card, if needed, must be called last "
             "because it needs an outfit.\n\n"
@@ -222,8 +222,10 @@ def _plan_tools(query: str) -> list[str]:
     # Enforce hard dependencies regardless of the model's output.
     plan = [t for t in plan if t != "search_listings"]
     plan.insert(0, "search_listings")
-    if "create_fit_card" not in plan:
+    if "create_fit_card" in plan:
         plan = [t for t in plan if t != "create_fit_card"] + ["create_fit_card"]
+    if "suggest_outfit" in plan and "create_fit_card" not in plan:
+        plan+=["create_fit_card"]
     return plan
 
 
